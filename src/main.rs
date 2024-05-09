@@ -2,6 +2,7 @@
 extern crate rocket;
 
 use log::info;
+use logic::info;
 use rocket::fairing::AdHoc;
 use rocket::http::Status;
 use rocket::serde::{json::Json, Deserialize};
@@ -15,14 +16,14 @@ mod logic;
 // API and Response Objects
 // See https://docs.battlesnake.com/api
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Game {
     id: String,
     ruleset: HashMap<String, Value>,
     timeout: u32,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct Board {
     height: u32,
     width: i32,
@@ -43,13 +44,13 @@ pub struct Battlesnake {
     shout: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone, Eq, Hash, Copy)]
 pub struct Coord {
     x: i32,
     y: i32,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct GameState {
     game: Game,
     turn: i32,
@@ -82,7 +83,7 @@ fn handle_move(move_req: Json<GameState>) -> Json<Value> {
         &move_req.board,
         &move_req.you,
     );
-
+    info!("RESPONSE: {}", response);
     Json(response)
 }
 

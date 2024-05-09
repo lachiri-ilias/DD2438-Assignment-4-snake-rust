@@ -1,21 +1,99 @@
-// Welcome to
-// __________         __    __  .__                               __
-// \______   \_____ _/  |__/  |_|  |   ____   ______ ____ _____  |  | __ ____
-//  |    |  _/\__  \\   __\   __\  | _/ __ \ /  ___//    \\__  \ |  |/ // __ \
-//  |    |   \ / __ \|  |  |  | |  |_\  ___/ \___ \|   |  \/ __ \|    <\  ___/
-//  |________/(______/__|  |__| |____/\_____>______>___|__(______/__|__\\_____>
-//
-// This file can be a nice home for your Battlesnake logic and helper functions.
-//
-// To get you started we've included code to prevent your Battlesnake from moving backwards.
-// For more info see docs.battlesnake.com
-
+use crate::Coord;
+use crate::{Battlesnake, Board, Game};
+use chrono::{DateTime, Duration, Local};
 use log::info;
 use rand::seq::SliceRandom;
+use rocket::{
+    time::Time,
+    tokio::time::{self, Timeout},
+};
+use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashSet, VecDeque};
+use std::fmt;
+const TIMEOUT: Duration = Duration::milliseconds(400);
 
-use crate::{Battlesnake, Board, Coord, Game, GameState};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Move {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl fmt::Display for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Move::Left => write!(f, "Left"),
+            Move::Right => write!(f, "Right"),
+            Move::Up => write!(f, "Up"),
+            Move::Down => write!(f, "Down"),
+        }
+    }
+}
+
+impl Serialize for Move {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let variant_str = match self {
+            Move::Left => "left",
+            Move::Down => "down",
+            Move::Up => "up",
+            Move::Right => "right",
+        };
+        serializer.serialize_str(variant_str)
+    }
+}
+
+struct BoardChanges {
+    removed_snakes: VecDeque<Battlesnake>,
+    removed_food: HashSet<Coord>,
+    snake_health_changes: Vec<(usize, i32)>,
+}
+
+impl BoardChanges {
+    fn new() -> Self {
+        BoardChanges {
+            removed_snakes: VecDeque::new(),
+            removed_food: HashSet::new(),
+            snake_health_changes: Vec::new(),
+        }
+    }
+
+    fn add_removed_snake(&mut self, snake: Battlesnake) {
+        self.removed_snakes.push_front(snake);
+    }
+
+    fn add_removed_food(&mut self, food: Coord) {
+        self.removed_food.insert(food);
+    }
+
+    fn add_health_change(&mut self, snake_idx: usize, health_change: i32) {
+        self.snake_health_changes.push((snake_idx, health_change));
+    }
+
+    fn revert(&mut self, board: &mut Board, snakes: &mut Vec<Battlesnake>) {
+        // Restore removed snakes
+        while let Some(snake) = self.removed_snakes.pop_back() {
+            snakes.push(snake);
+        }
+
+        // Restore removed food
+        for food in &self.removed_food {
+            board.food.push(*food);
+        }
+        self.removed_food.clear();
+
+        // Restore snake health changes
+        for (idx, health_change) in &self.snake_health_changes {
+            snakes[*idx].health -= health_change;
+        }
+        self.snake_health_changes.clear();
+    }
+}
 
 // info is called when you create your Battlesnake on play.battlesnake.com
 // and controls your Battlesnake's appearance
@@ -25,7 +103,7 @@ pub fn info() -> Value {
 
     return json!({
         "apiversion": "1",
-        "author": "Ilias_Saad", // TODO: Your Battlesnake Username
+        "author": "si", // TODO: Your Battlesnake Username
         "color": "#888888", // TODO: Choose color
         "head": "default", // TODO: Choose head
         "tail": "default", // TODO: Choose tail
@@ -45,262 +123,118 @@ pub fn end(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
 // move is called on every turn and returns your next move
 // Valid moves are "up", "down", "left", or "right"
 // See https://docs.battlesnake.com/api/example-move for available data
-pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
-    let mut is_move_safe: HashMap<_, _> = vec![
-        ("up", true),
-        ("down", true),
-        ("left", true),
-        ("right", true),
-    ]
-    .into_iter()
-    .collect();
-
-    // We've included code to prevent your Battlesnake from moving backwards
-    let my_head = &you.body[0]; // Coordinates of your head
-    let my_neck = &you.body[1]; // Coordinates of your "neck"  // let my_neck = you.body.get(1);
-
-    if my_neck.x < my_head.x {
-        // Neck is left of head, don't move left
-        is_move_safe.insert("left", false);
-    } else if my_neck.x > my_head.x {
-        // Neck is right of head, don't move right
-        is_move_safe.insert("right", false);
-    } else if my_neck.y < my_head.y {
-        // Neck is below head, don't move down
-        is_move_safe.insert("down", false);
-    } else if my_neck.y > my_head.y {
-        // Neck is above head, don't move up
-        is_move_safe.insert("up", false);
-    }
-
-    // TODO: Step 1 - Prevent your Battlesnake from moving out of bounds
-    let board_width = board.width as i32;
-    let board_height = board.height as i32;
-
-    if my_head.x == 0 {
-        is_move_safe.insert("left", false);
-    }
-    if my_head.x == board_width - 1 {
-        is_move_safe.insert("right", false);
-    }
-    if my_head.y == 0 {
-        is_move_safe.insert("down", false);
-    }
-    if my_head.y == board_height - 1 {
-        is_move_safe.insert("up", false);
-    }
-
-    // TODO: Step 2 - Prevent your Battlesnake from colliding with itself
-    let my_body = &you.body;
-
-    // Check each possible move to see if it would collide with your own body
-    for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
-        let new_x = my_head.x + dx;
-        let new_y = my_head.y + dy;
-
-        if my_body
-            .iter()
-            .any(|segment| segment.x == new_x && segment.y == new_y)
-        {
-            if dx == -1 {
-                is_move_safe.insert("left", false);
-            } else if dx == 1 {
-                is_move_safe.insert("right", false);
-            } else if dy == -1 {
-                is_move_safe.insert("down", false);
-            } else if dy == 1 {
-                is_move_safe.insert("up", false);
-            }
-        }
-    }
-
-    // TODO: Step 3 - Prevent your Battlesnake from colliding with other Battlesnakes
-    let opponents = &board.snakes;
-
-    for opponent in opponents {
-        for opponent_segment in &opponent.body {
-            for &(dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                let new_x = my_head.x + dx;
-                let new_y = my_head.y + dy;
-
-                if opponent_segment.x == new_x && opponent_segment.y == new_y {
-                    if dx == -1 {
-                        is_move_safe.insert("left", false);
-                    } else if dx == 1 {
-                        is_move_safe.insert("right", false);
-                    } else if dy == -1 {
-                        is_move_safe.insert("down", false);
-                    } else if dy == 1 {
-                        is_move_safe.insert("up", false);
-                    }
-                }
-            }
-        }
-    }
-
-    // TODO: Step 4 - Move towards food instead of random, to regain health and survive longer
-
-    let food = &board.food; // Get a reference to the food positions on the board
-
-    let closest_food = food
-        .iter()
-        .min_by_key(|item| (item.x - my_head.x).abs() + (item.y - my_head.y).abs());
-    if let Some(food) = closest_food {
-        let mut min_distance = std::i32::MAX;
-        let mut chosen = "up"; // Default direction
-
-        for &(dx, dy, dir) in &[
-            (-1, 0, "left"),
-            (1, 0, "right"),
-            (0, -1, "down"),
-            (0, 1, "up"),
-        ] {
-            let new_x = my_head.x + dx;
-            let new_y = my_head.y + dy;
-            let distance = (food.x - new_x).abs() + (food.y - new_y).abs();
-
-            if distance < min_distance && is_move_safe[dir] == true {
-                min_distance = distance;
-                chosen = dir;
-            }
-        }
-
-        info!("MOVE {}: {}", turn, chosen);
-        return json!({ "move": chosen });
-    }
-
-    // Are there any safe moves left?
-    let safe_moves = is_move_safe
-        .into_iter()
-        .filter(|&(_, v)| v)
-        .map(|(k, _)| k)
-        .collect::<Vec<_>>();
+pub fn get_move(_game: &Game, turn: &i32, _board: &Board, you: &Battlesnake) -> Value {
+    let possible_moves = get_possible_moves(you);
 
     // Choose a random move from the safe ones
-    // let chosen = safe_moves.choose(&mut rand::thread_rng()).unwrap();
-    let chosen = safe_moves.choose(&mut rand::thread_rng()).unwrap_or(&"up"); // default to "up" if no safe move is available
+    let chosen = possible_moves.choose(&mut rand::thread_rng()).unwrap();
 
+    let start = Local::now();
+    let mut depth = 0;
+    let mut chosen_move = Move::Up;
+    let mut alpha = std::f64::MIN;
+    let mut beta = std::f64::MAX;
+    let mut timeout = false;
+
+    // while !timeout {}
     info!("MOVE {}: {}", turn, chosen);
+    print_board(_board, you);
     return json!({ "move": chosen });
 }
 
-// TODO: add alpha-beta pruning, add 500ms limit
-fn minimax(game_state: &GameState, depth: usize, is_maximizing_player: bool) -> (String, i32) {
-    // Base case: Check if the game is over or depth is 0
-    if depth == 0 || is_terminal(game_state) {
-        return (String::new(), evaluate(game_state));
+pub fn get_possible_moves(you: &Battlesnake) -> Vec<Move> {
+    let mut possible_moves = vec![Move::Up, Move::Down, Move::Left, Move::Right];
+
+    let my_head = &you.body[0]; // Coordinates of your head
+    let my_neck = &you.body[1];
+
+    if my_neck.x < my_head.x {
+        // Neck is left of head, don't move left
+        possible_moves.retain(|m| m != &Move::Left)
+    } else if my_neck.x > my_head.x {
+        // Neck is right of head, don't move right
+        possible_moves.retain(|m| m != &Move::Right)
+    } else if my_neck.y < my_head.y {
+        // Neck is below head, don't move down
+        possible_moves.retain(|m| m != &Move::Down)
+    } else if my_neck.y > my_head.y {
+        // Neck is above head, don't move up
+        possible_moves.retain(|m| m != &Move::Up)
     }
 
-    // Recursive case: Iterate over possible moves, apply them, and call minimax recursively
-    let possible_moves = get_possible_moves(game_state);
-    let mut best_move = String::new();
-    let mut best_score = if is_maximizing_player {
-        i32::MIN
-    } else {
-        i32::MAX
-    };
+    possible_moves
+}
 
-    for m in possible_moves {
-        let new_state = apply_move(game_state, &m);
-        let (_, score) = minimax(&new_state, depth - 1, !is_maximizing_player);
+// "you" might not be needed here
+pub fn score_node(game: &Game, board: &Board, you: &Battlesnake) -> usize {
+    0
+}
 
-        if is_maximizing_player && score > best_score {
-            best_score = score;
-            best_move = m;
-        } else if !is_maximizing_player && score < best_score {
-            best_score = score;
-            best_move = m;
+pub fn mini_max(
+    game: &Game,
+    board: &Board,
+    you: &Battlesnake,
+    depth: usize,
+    alpha: f64,
+    beta: f64,
+    start_time: DateTime<Local>,
+) -> Option<(Move, usize)> {
+    let curr_time = Local::now();
+
+    if (curr_time - start_time >= TIMEOUT) {}
+    Some((Move::Up, 0))
+}
+
+pub fn simulate_move(
+    board: &mut Board,
+    snakes: &mut Vec<Battlesnake>,
+    snake_idx: usize,
+    move_dir: &Move,
+    changes: &mut BoardChanges,
+) {
+}
+
+pub fn undo_move(board: &mut Board, snakes: &mut Vec<Battlesnake>, changes: &mut BoardChanges) {
+    changes.revert(board, snakes);
+}
+
+pub fn print_board(board: &Board, you: &Battlesnake) {
+    let snakes = &board.snakes;
+    let mut snake_chars = ('A'..='Z').collect::<Vec<_>>();
+    let mut snake_coords: Vec<_> = snakes
+        .iter()
+        .map(|snake| {
+            let coords = snake.body.iter().cloned().collect::<HashSet<_>>();
+            (snake.id.clone(), coords)
+        })
+        .collect();
+
+    let player_coords = you.body.iter().cloned().collect::<HashSet<_>>();
+
+    for y in (0..board.height).rev() {
+        for x in 0..board.width {
+            let coord = crate::Coord { x: x, y: y as i32 };
+            let cell = if board.food.contains(&coord) {
+                "F".to_string()
+            } else if board.hazards.contains(&coord) {
+                "-".to_string()
+            } else if player_coords.contains(&coord) {
+                "S".to_string()
+            } else if let Some(snake_char) = snake_coords
+                .iter()
+                .find(|(_, coords)| coords.contains(&coord))
+                .map(|(id, _)| {
+                    let idx = snakes.iter().position(|s| s.id == *id).unwrap();
+                    let char = snake_chars[idx];
+                    (char.to_string()).repeat(1)
+                })
+            {
+                snake_char
+            } else {
+                "#".to_string()
+            };
+            print!("{} ", cell);
         }
+        println!();
     }
-
-    (best_move, best_score)
-}
-
-// TODO: more complex evaluate function
-fn evaluate(game_state: &GameState) -> i32 {
-    let head = &game_state.you.head;
-    let health = game_state.you.health;
-    let mut score = health / 10; // Basic health contribution to score
-
-    // Positive influence for being close to food
-    for food in &game_state.board.food {
-        let dist = (head.x - food.x).abs() + (head.y - food.y).abs();
-        if dist != 0 {
-            // Avoid division by zero
-            score += 100 / dist;
-        }
-    }
-
-    score
-}
-
-fn is_terminal(game_state: &GameState) -> bool {
-    let head = &game_state.you.head;
-    // Check if snake has hit the walls
-    if head.x < 0
-        || head.x >= game_state.board.width
-        || head.y < 0
-        || head.y >= game_state.board.height as i32
-    {
-        return true;
-    }
-    // Check if snake has collided with itself
-    for part in &game_state.you.body[1..] {
-        // Skip the head
-        if head.x == part.x && head.y == part.y {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn get_possible_moves(game_state: &GameState) -> Vec<String> {
-    let head = &game_state.you.head;
-    let mut moves = vec!["up", "down", "left", "right"]
-        .into_iter()
-        .map(String::from)
-        .collect::<Vec<String>>();
-
-    // Prevent moves that would collide with the snake's own body
-    if game_state.you.body.contains(&Coord {
-        x: head.x,
-        y: head.y - 1,
-    }) {
-        moves.retain(|m| m != "up");
-    }
-    if game_state.you.body.contains(&Coord {
-        x: head.x,
-        y: head.y + 1,
-    }) {
-        moves.retain(|m| m != "down");
-    }
-    if game_state.you.body.contains(&Coord {
-        x: head.x - 1,
-        y: head.y,
-    }) {
-        moves.retain(|m| m != "left");
-    }
-    if game_state.you.body.contains(&Coord {
-        x: head.x + 1,
-        y: head.y,
-    }) {
-        moves.retain(|m| m != "right");
-    }
-
-    moves
-}
-
-fn apply_move(game_state: &GameState, move_: &str) -> GameState {
-    let mut new_state = game_state.clone();
-    let head = &mut new_state.you.head;
-    match move_ {
-        "up" => head.y += 1,
-        "down" => head.y -= 1,
-        "left" => head.x -= 1,
-        "right" => head.x += 1,
-        _ => {}
-    }
-
-    new_state
 }
