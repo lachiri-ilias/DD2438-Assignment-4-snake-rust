@@ -2,7 +2,6 @@
 extern crate rocket;
 
 use log::info;
-use logic::info;
 use rocket::fairing::AdHoc;
 use rocket::http::Status;
 use rocket::serde::{json::Json, Deserialize};
@@ -23,7 +22,7 @@ pub struct Game {
     timeout: u32,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Board {
     height: u32,
     width: i32,

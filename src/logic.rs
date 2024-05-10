@@ -1,18 +1,13 @@
 use crate::Coord;
 use crate::{Battlesnake, Board, Game};
-use chrono::{DateTime, Duration, Local};
 use log::info;
-use rand::seq::SliceRandom;
-use rocket::{
-    time::Time,
-    tokio::time::{self, Timeout},
-};
 use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
-use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fmt;
-const TIMEOUT: Duration = Duration::milliseconds(400);
+use std::time::Instant;
+
+const TIMEOUT: u128 = 450;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Move {
@@ -48,53 +43,6 @@ impl Serialize for Move {
     }
 }
 
-struct BoardChanges {
-    removed_snakes: VecDeque<Battlesnake>,
-    removed_food: HashSet<Coord>,
-    snake_health_changes: Vec<(usize, i32)>,
-}
-
-impl BoardChanges {
-    fn new() -> Self {
-        BoardChanges {
-            removed_snakes: VecDeque::new(),
-            removed_food: HashSet::new(),
-            snake_health_changes: Vec::new(),
-        }
-    }
-
-    fn add_removed_snake(&mut self, snake: Battlesnake) {
-        self.removed_snakes.push_front(snake);
-    }
-
-    fn add_removed_food(&mut self, food: Coord) {
-        self.removed_food.insert(food);
-    }
-
-    fn add_health_change(&mut self, snake_idx: usize, health_change: i32) {
-        self.snake_health_changes.push((snake_idx, health_change));
-    }
-
-    fn revert(&mut self, board: &mut Board, snakes: &mut Vec<Battlesnake>) {
-        // Restore removed snakes
-        while let Some(snake) = self.removed_snakes.pop_back() {
-            snakes.push(snake);
-        }
-
-        // Restore removed food
-        for food in &self.removed_food {
-            board.food.push(*food);
-        }
-        self.removed_food.clear();
-
-        // Restore snake health changes
-        for (idx, health_change) in &self.snake_health_changes {
-            snakes[*idx].health -= health_change;
-        }
-        self.snake_health_changes.clear();
-    }
-}
-
 // info is called when you create your Battlesnake on play.battlesnake.com
 // and controls your Battlesnake's appearance
 // TIP: If you open your Battlesnake URL in a browser you should see this data
@@ -124,22 +72,33 @@ pub fn end(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
 // Valid moves are "up", "down", "left", or "right"
 // See https://docs.battlesnake.com/api/example-move for available data
 pub fn get_move(_game: &Game, turn: &i32, _board: &Board, you: &Battlesnake) -> Value {
-    let possible_moves = get_possible_moves(you);
+    let start_time = Instant::now();
+    let mut best_move = Move::Up;
+    let mut best_score = std::f64::MIN;
 
-    // Choose a random move from the safe ones
-    let chosen = possible_moves.choose(&mut rand::thread_rng()).unwrap();
+    for depth in 1..=4 {
+        let (m, score) = mini_max(
+            _game,
+            _board,
+            you,
+            depth,
+            std::f64::MIN,
+            std::f64::MAX,
+            start_time,
+            0, // TODO: make sure that the first snake in the array is our snake, so that we start with our snake
+        );
 
-    let start = Local::now();
-    let mut depth = 0;
-    let mut chosen_move = Move::Up;
-    let mut alpha = std::f64::MIN;
-    let mut beta = std::f64::MAX;
-    let mut timeout = false;
+        if score > best_score {
+            best_move = m;
+            best_score = score;
+        }
 
-    // while !timeout {}
-    info!("MOVE {}: {}", turn, chosen);
-    print_board(_board, you);
-    return json!({ "move": chosen });
+        if start_time.elapsed().as_millis() >= TIMEOUT {
+            break; // Exit loop if time is up
+        }
+    }
+
+    json!({ "move": best_move })
 }
 
 pub fn get_possible_moves(you: &Battlesnake) -> Vec<Move> {
@@ -165,43 +124,226 @@ pub fn get_possible_moves(you: &Battlesnake) -> Vec<Move> {
     possible_moves
 }
 
-// "you" might not be needed here
-pub fn score_node(game: &Game, board: &Board, you: &Battlesnake) -> usize {
-    0
-}
-
-pub fn mini_max(
+fn mini_max(
     game: &Game,
     board: &Board,
     you: &Battlesnake,
     depth: usize,
-    alpha: f64,
-    beta: f64,
-    start_time: DateTime<Local>,
-) -> Option<(Move, usize)> {
-    let curr_time = Local::now();
+    mut alpha: f64,
+    mut beta: f64,
+    start_time: Instant,
+    index: usize,
+) -> (Move, f64) {
+    if depth == 0 || is_terminal_state(board, you) {
+        return (Move::Up, score_node(board, you) as f64);
+    }
 
-    if (curr_time - start_time >= TIMEOUT) {}
-    Some((Move::Up, 0))
+    let snakes = &board.snakes; // All snakes in the game
+    let current_snake = &snakes[index % snakes.len()]; // Get the snake at the current index
+
+    let mut best_move = Move::Up;
+    let mut best_score = if current_snake.id == you.id {
+        std::f64::MIN
+    } else {
+        std::f64::MAX
+    };
+
+    let possible_moves = get_possible_moves(you);
+
+    for &mov in &possible_moves {
+        let new_board_state = simulate_move(board.clone(), index, mov);
+
+        let elapsed_ms = start_time.elapsed().as_millis();
+        if elapsed_ms >= TIMEOUT {
+            break; // Exit loop if time is up
+        }
+
+        let (_, score) = mini_max(
+            &game,
+            &new_board_state,
+            &you,
+            depth - 1,
+            alpha,
+            beta,
+            start_time,
+            index + 1,
+        );
+
+        if current_snake.id == you.id {
+            // Maximize if it's our snake's turn
+            if score > best_score {
+                best_score = score;
+                best_move = mov;
+                alpha = score.max(alpha);
+            }
+        } else {
+            // Minimize for enemy snakes' turns
+            if score < best_score {
+                best_score = score;
+                best_move = mov;
+                beta = score.min(beta);
+            }
+        }
+
+        if alpha >= beta {
+            break; // Beta cutoff
+        }
+    }
+
+    (best_move, best_score) // Return best_score
 }
 
-pub fn simulate_move(
-    board: &mut Board,
-    snakes: &mut Vec<Battlesnake>,
-    snake_idx: usize,
-    move_dir: &Move,
-    changes: &mut BoardChanges,
-) {
+fn simulate_move(board: Board, snake_index: usize, action: Move) -> Board {
+    let mut new_board = board.clone(); // Create a copy of the current board state
+
+    // Update the position of the snake corresponding to the given index based on the chosen action
+    let mut new_snakes = new_board.snakes.clone();
+    let head = new_snakes[snake_index].body[0]; // Current head position
+
+    let new_head = match action {
+        Move::Up => Coord {
+            x: head.x,
+            y: head.y + 1,
+        },
+        Move::Down => Coord {
+            x: head.x,
+            y: head.y - 1,
+        },
+        Move::Left => Coord {
+            x: head.x - 1,
+            y: head.y,
+        },
+        Move::Right => Coord {
+            x: head.x + 1,
+            y: head.y,
+        },
+    };
+
+    // Check for collisions with walls
+    let mut collision = false;
+    if new_head.x < 0
+        || new_head.y < 0
+        || new_head.x >= board.width
+        || new_head.y >= board.height as i32
+    {
+        collision = true;
+    } else {
+        // Check for collisions with other snakes
+        for other_snake in &new_snakes {
+            for (i, &coord) in other_snake.body.iter().enumerate() {
+                if coord == new_head {
+                    if i == 0 {
+                        // Head-to-head collision
+                        collision = new_snakes[snake_index].length <= other_snake.length;
+                    } else {
+                        // Body collision
+                        collision = true;
+                    }
+                    break;
+                }
+            }
+            if collision {
+                break;
+            }
+        }
+    }
+
+    // Apply collision result
+    if collision {
+        new_snakes[snake_index].health = 0;
+        new_snakes[snake_index].body.clear();
+    } else {
+        // Move the snake's head to the new position
+        new_snakes[snake_index].body.insert(0, new_head);
+
+        // Check if the snake consumes food
+        if board.food.contains(&new_head) {
+            new_snakes[snake_index].health =
+                std::cmp::min(new_snakes[snake_index].health + 10, 100);
+            let food_index = new_board.food.iter().position(|&coord| coord == new_head);
+            if let Some(index) = food_index {
+                new_board.food.remove(index); // Remove consumed food from the board
+            }
+        }
+
+        // Check if the snake hits a hazard
+        if board.hazards.contains(&new_head) {
+            new_snakes[snake_index].health = std::cmp::max(new_snakes[snake_index].health - 10, 0);
+        }
+
+        // Remove the tail segment if the snake didn't consume food
+        if new_snakes[snake_index].health > 0 && !board.food.contains(&new_head) {
+            new_snakes[snake_index].body.pop();
+        }
+    }
+
+    new_board.snakes = new_snakes;
+    new_board
 }
 
-pub fn undo_move(board: &mut Board, snakes: &mut Vec<Battlesnake>, changes: &mut BoardChanges) {
-    changes.revert(board, snakes);
+fn is_terminal_state(board: &Board, you: &Battlesnake) -> bool {
+    // Check if our snake is dead
+    if you.health == 0 {
+        return true;
+    }
+
+    // Check if there is only one snake left (ours)
+    if board.snakes.len() == 1 && board.snakes[0].id == you.id {
+        return true;
+    }
+
+    // Check if the game has ended due to all snakes being dead
+    if board.snakes.iter().all(|snake| snake.health == 0) {
+        return true;
+    }
+
+    // Additional terminal conditions can be added here
+
+    false // If none of the conditions are met, the game is not in a terminal state
+}
+
+// "you" might not be needed here
+pub fn score_node(board: &Board, you: &Battlesnake) -> i32 {
+    let mut score = 0;
+
+    // Health: Higher health increases the score
+    score += you.health;
+
+    // Length: Longer snakes have an advantage
+    score += you.body.len() as i32 * 10;
+
+    // Last snake standing: Huge bonus for being the only snake left
+    if board.snakes.len() == 1 && board.snakes[0].id == you.id {
+        score += 1000;
+    }
+
+    // Proximity to food: Closer to food is generally better
+    if let Some(closest_food) = board
+        .food
+        .iter()
+        .min_by_key(|food| (food.x - you.body[0].x).abs() + (food.y - you.body[0].y).abs())
+    {
+        let distance_to_food =
+            (closest_food.x - you.body[0].x).abs() + (closest_food.y - you.body[0].y).abs();
+        // Invert the distance to make closer food give a higher score
+        score += 100 / (1 + distance_to_food);
+    }
+
+    // You can add more heuristics here to refine how the score is calculated
+
+    score
 }
 
 pub fn print_board(board: &Board, you: &Battlesnake) {
     let snakes = &board.snakes;
-    let mut snake_chars = ('A'..='Z').collect::<Vec<_>>();
-    let mut snake_coords: Vec<_> = snakes
+    let snake_chars = ('A'..='Z').collect::<Vec<_>>();
+
+    for (index, snake) in snakes.iter().enumerate() {
+        let snake_char = snake_chars.get(index).unwrap_or(&'?');
+        println!("Snake {}: {}", snake_char, snake.health);
+    }
+
+    let snake_coords: Vec<_> = snakes
         .iter()
         .map(|snake| {
             let coords = snake.body.iter().cloned().collect::<HashSet<_>>();
