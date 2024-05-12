@@ -11,11 +11,13 @@
 // For more info see docs.battlesnake.com
 
 use log::info;
-use rand::seq::SliceRandom;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::HashSet;
 
-use crate::{Battlesnake, Board, Game};
+use std::collections::HashMap;
+use rand::seq::SliceRandom;
+
+use crate::{Battlesnake, Board, Coord, Game};
 
 // info is called when you create your Battlesnake on play.battlesnake.com
 // and controls your Battlesnake's appearance
@@ -79,7 +81,8 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
     // Avoid head-to-head collisions unless we are longer
     for snake in &board.snakes {
         if snake.id != you.id && snake.body.first().map_or(false, |h| h.x == new_x && h.y == new_y) {
-            if snake.body.len() >= you.body.len() {
+            if snake.body.len() > you.body.len() {
+                println!("$$$$  Avoiding head-to-head collision with snake {}", snake.id);
                 return false;
             }
         }
@@ -87,48 +90,28 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
 
     true
 }
+
+
 fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
-    let head = &you.body[0];
+    let head:&Coord = &you.body[0];
     let mut best_food_score = std::i32::MIN;
-    let health_factor = if you.health < 50 { 20.0 } else { 10.0 }; // Adjust the factor for more responsiveness
+    let health_factor = if you.health < 60 { 50.0 } else { 10.0 };
 
     for food in &board.food {
         let food_distance = (food.x - head.x).abs() + (food.y - head.y).abs();
         let food_score = -food_distance as f32 * health_factor;
         
-        // Safety check for the path to the food
-            best_food_score = best_food_score.max(food_score as i32);
+        // Enhance the score with area control evaluation
+        let area_control_score = evaluate_area_control(board, head);
+        let total_score = food_score + area_control_score as f32;
+
+        best_food_score = best_food_score.max(total_score as i32);
     }
 
-    // Additional scoring for free space availability
-    let free_spaces = calculate_free_space_around_head(board, you);
-    if free_spaces < 2 { // Dangerously low free space might indicate a potential trap
-        best_food_score /= 2; // Penalize potentially risky food positions
-    }
 
     best_food_score
 }
 
-
-
-
-fn calculate_free_space_around_head(board: &Board, you: &Battlesnake) -> i32 {
-    let head = you.body.first().unwrap();
-    let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)];
-    let mut free_spaces = 0;
-
-    for (dx, dy) in directions.iter() {
-        let new_x = head.x + dx;
-        let new_y = head.y + dy;
-        if new_x >= 0 && new_x < board.width as i32 && new_y >= 0 && new_y < board.height as i32 {
-            if !board.snakes.iter().any(|s| s.body.iter().any(|pos| pos.x == new_x && pos.y == new_y)) {
-                free_spaces += 1;
-            }
-        }
-    }
-
-    free_spaces
-}
 
 
 
@@ -157,10 +140,39 @@ fn simulate_move(board: &mut Board, you: &mut Battlesnake, move_dir: &str) {
 }
 
 
+// Implementing Area Control and Tactical Escapes
+fn evaluate_area_control(board: &Board, head: &Coord) -> i32 {
+    let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)];  // Up, right, down, left
+    let mut accessible_area = 0;
+    
+    let mut queue = vec![(head.x, head.y)];
+    let mut visited = HashSet::new();
+    visited.insert((head.x, head.y));
+
+    while let Some((x, y)) = queue.pop() {
+        for (dx, dy) in directions.iter() {
+            let nx = x + dx;
+            let ny = y + dy;
+            if nx >= 0 && nx < board.width as i32 && ny >= 0 && ny < board.height as i32 
+                && !visited.contains(&(nx, ny)) 
+                && !board.snakes.iter().any(|snake| snake.body.iter().any(|pos| pos.x == nx && pos.y == ny)) {
+                queue.push((nx, ny));
+                visited.insert((nx, ny));
+                accessible_area += 1;
+            }
+        }
+    }
+    accessible_area
+}
+
+
 
 fn minimax(board: &Board, you: &Battlesnake, depth: i32, alpha: i32, beta: i32, is_maximizing: bool) -> (i32, String) {
+    // println!("Entering depth: {}, Maximizing: {}", depth, is_maximizing);
     if depth == 0 {
-        return (evaluate_board(board, you), String::from("none"));
+        let score = evaluate_board(board, you);
+        // println!("Leaf node reached, score: {}", score);
+        return (score, String::from("none"));
     }
 
     let mut alpha = alpha;
@@ -169,7 +181,9 @@ fn minimax(board: &Board, you: &Battlesnake, depth: i32, alpha: i32, beta: i32, 
     let mut best_score = if is_maximizing { std::i32::MIN } else { std::i32::MAX };
 
     for &move_dir in ["up", "down", "left", "right"].iter() {
-        if is_move_safe(board, you, move_dir) {
+        let move_safe = is_move_safe(board, you, move_dir);
+        // println!("Depth {} Move {} is safe: {}", depth, move_dir, move_safe);
+        if move_safe {
             let mut new_board = board.clone();
             let mut new_you = you.clone();
             simulate_move(&mut new_board, &mut new_you, move_dir);
@@ -203,11 +217,40 @@ fn minimax(board: &Board, you: &Battlesnake, depth: i32, alpha: i32, beta: i32, 
 
 
 pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
-    let depth = 4; // Depth limit for minimax recursion
+    let depth = 8; // Depth limit for minimax recursion
     let (best_score, best_move) = minimax(board, you, depth,i32::MIN,i32::MAX, true);
 
-    println!("MOVE {}: Best move is '{}' with a score of {}", turn, best_move, best_score);
-    info!("MOVE {}: {}, score: {}", turn, best_move, best_score);
+    info!("MOVE {}: Best move is '{}' with a score of {}", turn, best_move, best_score);
+    // if best move is none, choose a random move that is safe
+    if best_move == "none" {
+        println!("No best move found, choosing a random safe move...%%%%%%%%%%%%%%%%%%");
+        let safe_moves = ["up", "down", "left", "right"].iter().filter(|&m| is_move_safe(board, you, m)).collect::<Vec<_>>();
+        let random_move = safe_moves.choose(&mut rand::thread_rng()).unwrap();
+        return json!({ "move": random_move });
+    }
     json!({ "move": best_move })
 }
 
+
+// pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
+//     let depth = 4;
+//     let (best_score, best_move) = minimax(board, you, depth, i32::MIN, i32::MAX, true);
+
+//     // Implement a move history tracking to detect loops
+//     static mut LAST_MOVES: Vec<String> = Vec::new();
+//     unsafe {
+//         LAST_MOVES.push(best_move.clone());
+//         if LAST_MOVES.len() > 5 { LAST_MOVES.remove(0); }
+        
+//         // Check for looping patterns
+//         if LAST_MOVES.windows(2).all(|moves| moves[0] == moves[1]) {
+//             // If detected a loop, try to break it by choosing a different move
+//             println!("Detected looping behavior, attempting to break...");
+//             LAST_MOVES.clear();
+//             return json!({ "move": ["up", "down", "left", "right"].choose(&mut rand::thread_rng()).unwrap() });
+//         }
+//     }
+
+//     println!("MOVE {}: Best move is '{}' with a score of {}", turn, best_move, best_score);
+//     json!({ "move": best_move })
+// }
