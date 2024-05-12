@@ -10,6 +10,7 @@ use serde_json::{Value};
 use std::collections::HashMap;
 use std::env;
 
+
 mod logic;
 
 // API and Response Objects
@@ -43,7 +44,7 @@ pub struct Battlesnake {
     shout: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Hash, PartialEq, Eq, Debug, Clone)]
 pub struct Coord {
     x: i32,
     y: i32,
