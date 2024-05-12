@@ -91,32 +91,83 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
     true
 }
 
-
 fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
-    let head:&Coord = &you.body[0];
-    let mut best_food_score = std::i32::MIN;
+    let head = &you.body[0];
+    let mut best_score = std::i32::MIN;
     let health_factor = if you.health < 60 { 50.0 } else { 10.0 };
 
     for food in &board.food {
         let food_distance = (food.x - head.x).abs() + (food.y - head.y).abs();
-        let food_score = -food_distance as f32 * health_factor;
-        
-        // Enhance the score with area control evaluation
-        let area_control_score = evaluate_area_control(board, head);
-        let total_score = food_score + area_control_score as f32;
+        let food_score = -(food_distance as f32) * health_factor;
 
-        best_food_score = best_food_score.max(total_score as i32);
+        // Check if the food is directly reachable next move
+        println!("Food distance: {}", food_distance);
+        if food_distance <= 4 {
+            return (food_score + 1000.0) as i32;  // Assign a very high score to prioritize eating
+        }
+
+        if food_score > best_score as f32 {
+            best_score = food_score as i32;
+        }
     }
 
-
-    best_food_score
+    best_score
 }
 
 
+// fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
+//     let head = &you.body[0];
+//     let mut best_food_score = std::i32::MIN;
+
+//     // Dynamic health factor increases as health decreases
+//     let health_factor = 100.0 - you.health as f32; // The less health, the higher the factor
+//     let base_food_weight = 60.0; // Base weight for food proximity
+
+//     for food in &board.food {
+//         let food_distance = (food.x - head.x).abs() + (food.y - head.y).abs();
+        
+//         // Increase score significantly as snake approaches food
+//         let food_score = -(food_distance as f32) * (base_food_weight + health_factor);
+        
+//         if food_score > best_food_score as f32 {
+//             best_food_score = food_score as i32;
+//         }
+    
+//     }
+
+//     best_food_score
+// }
 
 
-// fn simulate_move(board: Board, you: Battlesnake, move_dir: &str) {
-fn simulate_move(board: &mut Board, you: &mut Battlesnake, move_dir: &str) {
+
+// fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
+//     let head = &you.body[0];
+//     let mut best_score = std::i32::MIN;
+//     let health_importance = if you.health < 60 { 50.0 } else { 10.0 };
+
+//     for food in &board.food {
+//         let distance = (food.x - head.x).abs() + (food.y - head.y).abs();
+//         let food_score = -distance as f32 * health_importance;
+//         let area_control = evaluate_area_control(board, head);
+//         let total_score = food_score + area_control as f32;
+//         // let total_score = food_score;
+
+//         if total_score > best_score {
+//             best_score = total_score as i32;
+//         }
+//     }
+//     // // FOR Royal board
+//     // // Factor in hazards if applicable 
+//     // if let Some(hazards) = board.hazards {
+//     //     let hazard_penalty = if hazards.contains(head) { -100 } else { 0 };
+//     //     best_score += hazard_penalty;
+//     // }
+
+//     best_score
+// }
+
+
+fn simulate_move(board: &mut Board, snake: &mut Battlesnake, move_dir: &str) {
     let (dx, dy) = match move_dir {
         "up" => (0, 1),
         "down" => (0, -1),
@@ -125,19 +176,20 @@ fn simulate_move(board: &mut Board, you: &mut Battlesnake, move_dir: &str) {
         _ => (0, 0),
     };
 
-    let mut new_head = you.body[0].clone();
+    let mut new_head = snake.body[0].clone();
     new_head.x += dx;
     new_head.y += dy;
 
     // Check if the new head position is on a food
     if let Some(index) = board.food.iter().position(|f| f.x == new_head.x && f.y == new_head.y) {
-        you.body.insert(0, new_head); // Add new head to the body
+        snake.body.insert(0, new_head); // Add new head to the body
         board.food.remove(index); // Remove the food from the board
     } else {
-        you.body.pop(); // Remove the last segment of the body
-        you.body.insert(0, new_head); // Add new head to the body
+        snake.body.pop(); // Remove the last segment of the body if not eating
+        snake.body.insert(0, new_head); // Add new head to the body
     }
 }
+
 
 
 // Implementing Area Control and Tactical Escapes
@@ -167,43 +219,45 @@ fn evaluate_area_control(board: &Board, head: &Coord) -> i32 {
 
 
 
-fn minimax(board: &Board, you: &Battlesnake, depth: i32, alpha: i32, beta: i32, is_maximizing: bool) -> (i32, String) {
-    // println!("Entering depth: {}, Maximizing: {}", depth, is_maximizing);
+
+fn minimax(board: &Board, snakes: &Vec<Battlesnake>, depth: i32, alpha: i32, beta: i32, maximizing_player_index: usize) -> (i32, String) {
     if depth == 0 {
-        let score = evaluate_board(board, you);
-        // println!("Leaf node reached, score: {}", score);
-        return (score, String::from("none"));
+        return (evaluate_board(board, &snakes[0]), String::from("none"));  // Assuming index 0 is your snake
     }
 
     let mut alpha = alpha;
     let mut beta = beta;
-    let mut best_move = String::from("none");
-    let mut best_score = if is_maximizing { std::i32::MIN } else { std::i32::MAX };
+    let mut current_best_move = String::from("none");
+    let directions = ["up", "down", "left", "right"];
+    let mut best_score = if maximizing_player_index == 0 { i32::MIN } else { i32::MAX };
 
-    for &move_dir in ["up", "down", "left", "right"].iter() {
-        let move_safe = is_move_safe(board, you, move_dir);
+    for &move_dir in &directions {
+        let move_safe = is_move_safe(board, &snakes[maximizing_player_index], move_dir);
         // println!("Depth {} Move {} is safe: {}", depth, move_dir, move_safe);
         if move_safe {
-            let mut new_board = board.clone();
-            let mut new_you = you.clone();
-            simulate_move(&mut new_board, &mut new_you, move_dir);
+            let mut new_board = board.clone(); 
+            let mut new_snakes = snakes.clone();
+            
+            // Simulate move for the current player
+            simulate_move(&mut new_board, &mut new_snakes[maximizing_player_index], move_dir);
+            
+            let next_player_index = (maximizing_player_index + 1) % snakes.len();
+            let (score, _) = minimax(&new_board, &new_snakes, depth - 1, alpha, beta, next_player_index);
 
-            let (score, _) = minimax(&new_board, &new_you, depth - 1, alpha, beta, !is_maximizing);
-
-            if is_maximizing && score > best_score {
-                best_score = score;
-                best_move = move_dir.to_string();
-            } else if !is_maximizing && score < best_score {
-                best_score = score;
-                best_move = move_dir.to_string();
-            }
-
-            if is_maximizing {
+            if maximizing_player_index == 0 {  // Your snake is maximizing
+                if score > best_score {
+                    best_score = score;
+                    current_best_move = move_dir.to_string();
+                }
                 alpha = std::cmp::max(alpha, score);
                 if beta <= alpha {
                     break;
                 }
-            } else {
+            } else {  // Opponent snake is minimizing
+                if score < best_score {
+                    best_score = score;
+                    current_best_move = move_dir.to_string();
+                }
                 beta = std::cmp::min(beta, score);
                 if beta <= alpha {
                     break;
@@ -212,45 +266,28 @@ fn minimax(board: &Board, you: &Battlesnake, depth: i32, alpha: i32, beta: i32, 
         }
     }
 
-    (best_score, best_move)
+    (best_score, current_best_move)
 }
 
 
-pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
-    let depth = 8; // Depth limit for minimax recursion
-    let (best_score, best_move) = minimax(board, you, depth,i32::MIN,i32::MAX, true);
 
-    info!("MOVE {}: Best move is '{}' with a score of {}", turn, best_move, best_score);
-    // if best move is none, choose a random move that is safe
+pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
+    let depth = 8; // Adjust depth based on performance and time constraints
+    let snakes = &board.snakes; // Add opponents here as well
+   
+    // find my snak Id in the snakes list only run this once
+    let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
+    // println!("My snake index is: {}", my_snake_index);
+    
+    let (score, best_move) = minimax(board, &snakes, depth, i32::MIN, i32::MAX, my_snake_index); // 0 is your snake's index
+
     if best_move == "none" {
         println!("No best move found, choosing a random safe move...%%%%%%%%%%%%%%%%%%");
         let safe_moves = ["up", "down", "left", "right"].iter().filter(|&m| is_move_safe(board, you, m)).collect::<Vec<_>>();
         let random_move = safe_moves.choose(&mut rand::thread_rng()).unwrap();
         return json!({ "move": random_move });
     }
+
+    println!("MOVE {}: Best move is '{}' with a score of {}", turn, best_move, score);
     json!({ "move": best_move })
 }
-
-
-// pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
-//     let depth = 4;
-//     let (best_score, best_move) = minimax(board, you, depth, i32::MIN, i32::MAX, true);
-
-//     // Implement a move history tracking to detect loops
-//     static mut LAST_MOVES: Vec<String> = Vec::new();
-//     unsafe {
-//         LAST_MOVES.push(best_move.clone());
-//         if LAST_MOVES.len() > 5 { LAST_MOVES.remove(0); }
-        
-//         // Check for looping patterns
-//         if LAST_MOVES.windows(2).all(|moves| moves[0] == moves[1]) {
-//             // If detected a loop, try to break it by choosing a different move
-//             println!("Detected looping behavior, attempting to break...");
-//             LAST_MOVES.clear();
-//             return json!({ "move": ["up", "down", "left", "right"].choose(&mut rand::thread_rng()).unwrap() });
-//         }
-//     }
-
-//     println!("MOVE {}: Best move is '{}' with a score of {}", turn, best_move, best_score);
-//     json!({ "move": best_move })
-// }
