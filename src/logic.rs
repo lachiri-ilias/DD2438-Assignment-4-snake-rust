@@ -91,7 +91,7 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
                 .first()
                 .map_or(false, |h| h.x == new_x && h.y == new_y)
         {
-            if snake.body.len() > you.body.len() {
+            if snake.body.len() >= you.body.len() {
                 println!(
                     "$$$$  Avoiding head-to-head collision with snake {}",
                     snake.id
@@ -173,7 +173,7 @@ fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
         let food_score = -(food_distance as f32) * health_factor;
 
         // Check if the food is directly reachable next move
-        println!("Food distance: {}", food_distance);
+        // println!("Food distance: {}", food_distance);
         if food_distance <= 4 {
             return (food_score + 1000.0) as i32; // Assign a very high score to prioritize eating
         }
@@ -242,6 +242,7 @@ fn minimax(
     alpha: i32,
     beta: i32,
     maximizing_player_index: usize,
+    current_player_index: usize,
 ) -> (i32, String) {
     if depth == 0 {
         return (evaluate_board(board, &snakes[0]), String::from("none")); // Assuming index 0 is your snake
@@ -251,37 +252,45 @@ fn minimax(
     let mut beta = beta;
     let mut current_best_move = String::from("none");
     let directions = ["up", "down", "left", "right"];
-    let mut best_score = if maximizing_player_index == 0 {
+    let mut best_score = if current_player_index == maximizing_player_index {
         i32::MIN
     } else {
         i32::MAX
     };
 
-    for &move_dir in &directions {
-        let move_safe = is_move_safe(board, &snakes[maximizing_player_index], move_dir);
+    let mut boolT = false;
+    for &move_dir in &directions 
+    {
+        let move_safe = is_move_safe(board, &snakes[current_player_index], move_dir);
+        
         // println!("Depth {} Move {} is safe: {}", depth, move_dir, move_safe);
         if move_safe {
+            boolT = true;
             let mut new_board = board.clone();
             let mut new_snakes = snakes.clone();
 
             // Simulate move for the current player
             simulate_move(
                 &mut new_board,
-                &mut new_snakes[maximizing_player_index],
+                &mut new_snakes[current_player_index],
                 move_dir,
             );
 
-            let next_player_index = (maximizing_player_index + 1) % snakes.len();
+                // if snake dies wich one to remove ?  
+                // make a list if dies remove the id snake from the list and make iteration in the list
+            let next_player_index = (current_player_index + 1) % snakes.len(); 
             let (score, _) = minimax(
                 &new_board,
                 &new_snakes,
                 depth - 1,
                 alpha,
                 beta,
+                maximizing_player_index,
                 next_player_index,
             );
-
-            if maximizing_player_index == 0 {
+            
+            if current_player_index == maximizing_player_index {
+                // println!("Depth {} Move {} is safe: {} score {} vs bestScore {} with currentBestMove {}", depth, move_dir, move_safe, score, best_score, current_best_move);
                 // Your snake is maximizing
                 if score > best_score {
                     best_score = score;
@@ -304,6 +313,15 @@ fn minimax(
             }
         }
     }
+    // if !boolT {
+    //     if maximizing_player_index == 0 {
+    //         return (i32::MIN, String::from("none")); // Assuming index 0 is your snake
+    //     }
+    //     else{
+    //         return (i32::MAX, String::from("none"));
+            
+    //     }     
+    // }
 
     (best_score, current_best_move)
 }
@@ -311,14 +329,15 @@ fn minimax(
 
 
 pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
-    let depth = 9; // Adjust depth based on performance and time constraints
+    let depth =12; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
     // find my snak Id in the snakes list only run this once
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
     // println!("My snake index is: {}", my_snake_index);
+    // println!("My snake index is: {}", my_snake_index);
 
-    let (score, best_move) = minimax(board, &snakes, depth, i32::MIN, i32::MAX, my_snake_index); // 0 is your snake's index
+    let (score, best_move) = minimax(board, &snakes, depth, i32::MIN, i32::MAX, my_snake_index,0); // 0 is your snake's index
 
     if best_move == "none" {
         println!("No best move found, choosing a random safe move...%%%%%%%%%%%%%%%%%%");
