@@ -12,13 +12,14 @@
 
 use log::info;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::{cmp::max, collections::HashSet, thread::current};
 
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
 
-use crate::{Battlesnake, Board, Coord, Game};
+use crate::{Battlesnake, Board, Coord, Game, GameState};
 
+static mut GAME_STARTED: bool = false;
 // info is called when you create your Battlesnake on play.battlesnake.com
 // and controls your Battlesnake's appearance
 // TIP: If you open your Battlesnake URL in a browser you should see this data
@@ -36,6 +37,11 @@ pub fn info() -> Value {
 
 // start is called when your Battlesnake begins a game
 pub fn start(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
+    println!(
+        "--------------GAME START-----------, my snake id: {}",
+        _you.id
+    );
+    unsafe { GAME_STARTED = true };
     info!("GAME START");
 }
 
@@ -104,7 +110,7 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
     true
 }
 
-fn simulate_move(board: &mut Board, snake: &mut Battlesnake, move_dir: &str) {
+fn simulate_move(board: &mut Board, snake_id: usize, move_dir: &str) {
     let (dx, dy) = match move_dir {
         "up" => (0, 1),
         "down" => (0, -1),
@@ -113,7 +119,7 @@ fn simulate_move(board: &mut Board, snake: &mut Battlesnake, move_dir: &str) {
         _ => (0, 0),
     };
 
-    let mut new_head = snake.body[0].clone();
+    let mut new_head = board.snakes[snake_id].body[0].clone();
     new_head.x += dx;
     new_head.y += dy;
 
@@ -123,121 +129,106 @@ fn simulate_move(board: &mut Board, snake: &mut Battlesnake, move_dir: &str) {
         .iter()
         .position(|f| f.x == new_head.x && f.y == new_head.y)
     {
-        snake.body.insert(0, new_head); // Add new head to the body
+        board.snakes[snake_id].health = 100;
+        board.snakes[snake_id].length += 1;
+        board.snakes[snake_id].body.insert(0, new_head); // Add new head to the body
         board.food.remove(index); // Remove the food from the board
     } else {
-        snake.body.pop(); // Remove the last segment of the body if not eating
-        snake.body.insert(0, new_head); // Add new head to the body
+        board.snakes[snake_id].health -= 1;
+        board.snakes[snake_id].body.pop(); // Remove the last segment of the body if not eating
+        board.snakes[snake_id].body.insert(0, new_head); // Add new head to the body
     }
+
+    // here add head-to-head collision detection
 }
 
-fn flood_fill_area(board: &Board, start: &Coord) -> i32 {
-    let mut accessible_area = 0;
-    let mut visited = HashSet::new();
-    let mut stack = vec![start.clone()];
+fn evaluate_board(board: &Board, you_id: usize) -> i32 {
+    let you = &board.snakes[you_id];
+    let head = &you.body[0];
+    let mut score = 0;
 
-    while let Some(pos) = stack.pop() {
-        if visited.contains(&pos) {
-            continue;
+    // Check if the snake just ate food (health is max)
+    let just_ate_food = you.health == 100;
+    let dead = you.health == 0;
+
+    // Calculate distance to the nearest food
+    let mut min_food_distance = std::i32::MAX;
+    for food in &board.food {
+        let food_distance = (food.x - head.x).abs() + (food.y - head.y).abs();
+        if food_distance < min_food_distance {
+            min_food_distance = food_distance;
         }
+    }
 
-        visited.insert(pos.clone());
-        accessible_area += 1;
+    // Factor food distance into the score
+    if just_ate_food {
+        score += 2300; // High score for eating food
+    } else if min_food_distance != std::i32::MAX {
+        score += (22 - min_food_distance) * 100;
+    }
 
-        // Check all four possible directions
-        let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)];  // Up, Right, Down, Left
-        for (dx, dy) in directions.iter() {
-            let new_pos = Coord { x: pos.x + dx, y: pos.y + dy };
+    if dead {
+        score -= 5500;
+    }
 
-            if new_pos.x >= 0 && new_pos.x < board.width as i32
-                && new_pos.y >= 0 && new_pos.y < board.height as i32
-                && !board.snakes.iter().any(|s| s.body.contains(&new_pos))
-                && !visited.contains(&new_pos) {
-                stack.push(new_pos);
+    // Add score for available health (more health is better)
+    score += you.health as i32;
+
+    // Calculate distance to the nearest enemy body segment
+    let mut min_enemy_distance = std::i32::MAX;
+    for snake in &board.snakes {
+        if snake.id != you.id {
+            for segment in &snake.body {
+                let enemy_distance = (segment.x - head.x).abs() + (segment.y - head.y).abs();
+                if enemy_distance < min_enemy_distance {
+                    min_enemy_distance = enemy_distance;
+                }
             }
         }
     }
 
-    accessible_area
-}
-
-
-
-fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
-    let head = &you.body[0];
-    let mut best_score = std::i32::MIN;
-    let health_factor = if you.health < 60 { 80.0 } else { 10.0 };
-
-    for food in &board.food {
-        let food_distance = (food.x - head.x).abs() + (food.y - head.y).abs();
-        let food_score = -(food_distance as f32) * health_factor;
-
-        // Check if the food is directly reachable next move
-        // println!("Food distance: {}", food_distance);
-        if food_distance <= 4 {
-            return (food_score + 1000.0) as i32; // Assign a very high score to prioritize eating
-        }
-        // let area_control = evaluate_area_control(board, head);
-        // let total_score = food_score + area_control as f32;
-        let total_score = food_score;
-
-        // let free_space = flood_fill_area(board, head);
-        
-        // let combined_score = total_score + free_space as f32;
-        let combined_score = total_score;
-        
-        if combined_score > best_score as f32{
-            best_score = combined_score as i32;
-        }
-
+    // Apply a non-linear penalty for being close to an enemy
+    if min_enemy_distance != std::i32::MAX {
+        score -= (22 - min_enemy_distance) * 100;
     }
 
-    // // FOR Royal board
-    // // Factor in hazards if applicable
-    // if let Some(hazards) = board.hazards {
-    //     let hazard_penalty = if hazards.contains(head) { -100 } else { 0 };
-    //     best_score += hazard_penalty;
-    // }
+    // Add score for free space around the snake's head (prefer more space)
+    let directions = ["up", "down", "left", "right"];
+    let free_space = directions
+        .iter()
+        .map(|&dir| match dir {
+            "up" => (head.x, head.y + 1),
+            "down" => (head.x, head.y - 1),
+            "left" => (head.x - 1, head.y),
+            "right" => (head.x + 1, head.y),
+            _ => (head.x, head.y),
+        })
+        .filter(|&(new_x, new_y)| {
+            // Ensure the new position is within bounds and not colliding with any snake
+            new_x >= 0
+                && new_x < board.width as i32
+                && new_y >= 0
+                && new_y < board.height as i32
+                && !you
+                    .body
+                    .iter()
+                    .any(|segment| segment.x == new_x && segment.y == new_y)
+                && !board.snakes.iter().any(|snake| {
+                    snake
+                        .body
+                        .iter()
+                        .any(|segment| segment.x == new_x && segment.y == new_y)
+                })
+        })
+        .count() as i32;
 
-    best_score
+    score += free_space * 10; // Each free space adds to the score
+
+    score
 }
-
-
-// // Implementing Area Control and Tactical Escapes
-// fn evaluate_area_control(board: &Board, head: &Coord) -> i32 {
-//     let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]; // Up, right, down, left
-//     let mut accessible_area = 0;
-
-//     let mut queue = vec![(head.x, head.y)];
-//     let mut visited = HashSet::new();
-//     visited.insert((head.x, head.y));
-
-//     while let Some((x, y)) = queue.pop() {
-//         for (dx, dy) in directions.iter() {
-//             let nx = x + dx;
-//             let ny = y + dy;
-//             if nx >= 0
-//                 && nx < board.width as i32
-//                 && ny >= 0
-//                 && ny < board.height as i32
-//                 && !visited.contains(&(nx, ny))
-//                 && !board
-//                     .snakes
-//                     .iter()
-//                     .any(|snake| snake.body.iter().any(|pos| pos.x == nx && pos.y == ny))
-//             {
-//                 queue.push((nx, ny));
-//                 visited.insert((nx, ny));
-//                 accessible_area += 1;
-//             }
-//         }
-//     }
-//     accessible_area
-// }
 
 fn minimax(
     board: &Board,
-    snakes: &Vec<Battlesnake>,
     depth: i32,
     alpha: i32,
     beta: i32,
@@ -245,7 +236,13 @@ fn minimax(
     current_player_index: usize,
 ) -> (i32, String) {
     if depth == 0 {
-        return (evaluate_board(board, &snakes[0]), String::from("none")); // Assuming index 0 is your snake
+        let score = evaluate_board(board, current_player_index);
+        println!(
+            "depth: {}, snake id: {}, score: {}",
+            depth, current_player_index, score
+        );
+
+        return (score, String::from("none")); // Assuming index 0 is your snake
     }
 
     let mut alpha = alpha;
@@ -258,39 +255,37 @@ fn minimax(
         i32::MAX
     };
 
-    let mut boolT = false;
-    for &move_dir in &directions 
-    {
-        let move_safe = is_move_safe(board, &snakes[current_player_index], move_dir);
-        
-        // println!("Depth {} Move {} is safe: {}", depth, move_dir, move_safe);
-        if move_safe {
-            boolT = true;
+    let mut move_found = false; // Track if any valid move is found
+    for &move_dir in &directions {
+        if is_move_safe(board, &board.snakes[current_player_index], move_dir) {
+            move_found = true;
             let mut new_board = board.clone();
-            let mut new_snakes = snakes.clone();
 
             // Simulate move for the current player
-            simulate_move(
-                &mut new_board,
-                &mut new_snakes[current_player_index],
-                move_dir,
-            );
+            simulate_move(&mut new_board, current_player_index, move_dir);
 
-                // if snake dies wich one to remove ?  
-                // make a list if dies remove the id snake from the list and make iteration in the list
-            let next_player_index = (current_player_index + 1) % snakes.len(); 
+            // println!(
+            //     "depth: {}, move: {}, snake id: {}",
+            //     depth, move_dir, current_player_index
+            // );
+            //print_board(&new_board, &board.snakes[maximizing_player_index]);
+
+            let next_player_index = (current_player_index + 1) % board.snakes.len();
             let (score, _) = minimax(
                 &new_board,
-                &new_snakes,
                 depth - 1,
                 alpha,
                 beta,
                 maximizing_player_index,
                 next_player_index,
             );
-            
+
+            println!(
+                "depth: {}, move: {}, snake id: {}, score: {}",
+                depth, move_dir, current_player_index, score
+            );
+
             if current_player_index == maximizing_player_index {
-                // println!("Depth {} Move {} is safe: {} score {} vs bestScore {} with currentBestMove {}", depth, move_dir, move_safe, score, best_score, current_best_move);
                 // Your snake is maximizing
                 if score > best_score {
                     best_score = score;
@@ -313,34 +308,33 @@ fn minimax(
             }
         }
     }
-    // if !boolT {
-    //     if maximizing_player_index == 0 {
-    //         return (i32::MIN, String::from("none")); // Assuming index 0 is your snake
-    //     }
-    //     else{
-    //         return (i32::MAX, String::from("none"));
-            
-    //     }     
-    // }
+
+    if !move_found {
+        // Handle no safe moves found
+        return if current_player_index == maximizing_player_index {
+            (i32::MIN, String::from("none"))
+        } else {
+            (i32::MAX, String::from("none"))
+        };
+    }
 
     (best_score, current_best_move)
 }
 
-
-
 pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Value {
-    let depth =12; // Adjust depth based on performance and time constraints
+    if !unsafe { GAME_STARTED } {
+        return json!({ "move": "up" });
+    }
+    println!("----------------NEW TURN----------------");
+    let depth = 2; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
-    // find my snak Id in the snakes list only run this once
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
-    // println!("My snake index is: {}", my_snake_index);
-    // println!("My snake index is: {}", my_snake_index);
 
-    let (score, best_move) = minimax(board, &snakes, depth, i32::MIN, i32::MAX, my_snake_index,0); // 0 is your snake's index
+    let (score, best_move) = minimax(board, depth, i32::MIN, i32::MAX, my_snake_index, 0);
 
     if best_move == "none" {
-        println!("No best move found, choosing a random safe move...%%%%%%%%%%%%%%%%%%");
+        println!("No best move found, choosing a random safe move...");
         let safe_moves = ["up", "down", "left", "right"]
             .iter()
             .filter(|&m| is_move_safe(board, you, m))
@@ -349,9 +343,57 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
         return json!({ "move": random_move });
     }
 
-    println!(
+    info!(
         "MOVE {}: Best move is '{}' with a score of {}",
         turn, best_move, score
     );
+
     json!({ "move": best_move })
+}
+
+pub fn print_board(board: &Board, you: &Battlesnake) {
+    let snakes = &board.snakes;
+    let snake_chars = ('A'..='Z').collect::<Vec<_>>();
+
+    for (index, snake) in snakes.iter().enumerate() {
+        let snake_char = snake_chars.get(index).unwrap_or(&'?');
+        println!("Snake {}: {}", snake_char, snake.health);
+    }
+
+    let snake_coords: Vec<_> = snakes
+        .iter()
+        .map(|snake| {
+            let coords = snake.body.iter().cloned().collect::<HashSet<_>>();
+            (snake.id.clone(), coords)
+        })
+        .collect();
+
+    let player_coords = you.body.iter().cloned().collect::<HashSet<_>>();
+
+    for y in (0..board.height).rev() {
+        for x in 0..board.width {
+            let coord = crate::Coord { x: x, y: y as i32 };
+            let cell = if board.food.contains(&coord) {
+                "F".to_string()
+            } else if board.hazards.contains(&coord) {
+                "-".to_string()
+            } else if player_coords.contains(&coord) {
+                "S".to_string()
+            } else if let Some(snake_char) = snake_coords
+                .iter()
+                .find(|(_, coords)| coords.contains(&coord))
+                .map(|(id, _)| {
+                    let idx = snakes.iter().position(|s| s.id == *id).unwrap();
+                    let char = snake_chars[idx];
+                    (char.to_string()).repeat(1)
+                })
+            {
+                snake_char
+            } else {
+                "#".to_string()
+            };
+            print!("{} ", cell);
+        }
+        println!();
+    }
 }
