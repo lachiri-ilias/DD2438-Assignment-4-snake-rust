@@ -76,7 +76,7 @@ pub fn get_move(game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> Va
     let mut best_move = Move::Up;
     let mut best_score = std::i32::MIN;
 
-    let mut depth = 8;
+    let mut depth = 3;
 
     (best_move, best_score) = mini_max(board, you, depth, i32::MIN, i32::MAX, start_time, 0);
     info!("best move: {}, with score: {}", best_move, best_score);
@@ -93,13 +93,14 @@ fn mini_max(
     mut index: usize,
 ) -> (Move, i32) {
     if depth == 0 {
-        return (Move::Up, score_node(board, you));
+        return (Move::Up, evaluate_board(board, you));
     }
 
     let all_snakes = &board.snakes;
     index = index % all_snakes.len();
     let curr_snake = &all_snakes[index];
-
+    info!("----> depth = {}, snake index = {}", depth, index);
+    print_board(board, &board.snakes[index]);
     let maximizing = curr_snake.id == you.id;
 
     let possible_moves = get_possible_moves(board, curr_snake);
@@ -112,7 +113,15 @@ fn mini_max(
 
         simulate_move(&mut new_board, index, &dir);
 
-        let (_, score) = mini_max(&new_board, you, depth - 1, alpha, beta, start_time, index);
+        let (_, score) = mini_max(
+            &new_board,
+            you,
+            depth - 1,
+            alpha,
+            beta,
+            start_time,
+            index + 1,
+        );
 
         if maximizing && score > best_score {
             best_score = score;
@@ -314,6 +323,52 @@ pub fn score_node(board: &Board, you: &Battlesnake) -> i32 {
     score
 }
 
+fn evaluate_board(board: &Board, you: &Battlesnake) -> i32 {
+    let head = &you.body[0];
+    let mut best_food_score = std::i32::MIN;
+    // let health_factor = if you.health < 50 { 20.0 } else { 10.0 }; // Adjust the factor for more responsiveness
+    if you.health > 90 {
+        best_food_score = i32::MAX;
+    }
+    for food in &board.food {
+        let food_distance = (food.x - head.x).abs() + (food.y - head.y).abs();
+        let food_score = -food_distance as f32;
+
+        // Safety check for the path to the food
+        best_food_score = best_food_score.max(food_score as i32);
+    }
+
+    // Additional scoring for free space availability
+    // let free_spaces = calculate_free_space_around_head(board, you);
+    // if free_spaces < 2 {
+    //     // Dangerously low free space might indicate a potential trap
+    //     best_food_score /= 2; // Penalize potentially risky food positions
+    // }
+
+    best_food_score
+}
+
+fn calculate_free_space_around_head(board: &Board, you: &Battlesnake) -> i32 {
+    let head = you.body.first().unwrap();
+    let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+    let mut free_spaces = 0;
+
+    for (dx, dy) in directions.iter() {
+        let new_x = head.x + dx;
+        let new_y = head.y + dy;
+        if new_x >= 0 && new_x < board.width as i32 && new_y >= 0 && new_y < board.height as i32 {
+            if !board
+                .snakes
+                .iter()
+                .any(|s| s.body.iter().any(|pos| pos.x == new_x && pos.y == new_y))
+            {
+                free_spaces += 1;
+            }
+        }
+    }
+
+    free_spaces
+}
 pub fn print_board(board: &Board, you: &Battlesnake) {
     let snakes = &board.snakes;
     let snake_chars = ('A'..='Z').collect::<Vec<_>>();
