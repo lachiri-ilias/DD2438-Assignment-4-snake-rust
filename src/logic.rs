@@ -107,6 +107,40 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
         }
     }
 
+    // Avoid head-to-head collisions unless we are longer
+    let my_head = (you.body[0].x, you.body[0].y);
+    let binding = [
+        (new_x + 1, new_y),
+        (new_x - 1, new_y),
+        (new_x, new_y + 1),
+        (new_x, new_y - 1),
+    ];
+    let surrounding_positions: Vec<_> = IntoIterator::into_iter(binding)
+        .filter(|&pos| {
+            pos.0 >= 0 && pos.0 < board.width && pos.1 >= 0 && pos.1 < board.height as i32
+        })
+        .filter(|&pos| (pos != my_head) || (you.body.len() > 1))
+        .collect();
+
+    println!(
+        "my head: {:?}, dir: {}, surrounding: {:?}",
+        you.head, direction, surrounding_positions
+    );
+
+    for snake in &board.snakes {
+        if snake.id != you.id {
+            if surrounding_positions.iter().any(|(x, y)| {
+                snake.body[0].x == *x && snake.body[0].y == *y && snake.body.len() >= you.body.len()
+            }) {
+                println!(
+                    "$$$$  Avoiding head-to-head collision with snake {}",
+                    snake.id
+                );
+                return false;
+            }
+        }
+    }
+
     true
 }
 
@@ -281,8 +315,8 @@ fn minimax(
             );
 
             println!(
-                "depth: {}, move: {}, snake id: {}, score: {}",
-                depth, move_dir, current_player_index, score
+                "depth: {}, move: {}, snake id: {}, score: {}, maximizing id: {}",
+                depth, move_dir, current_player_index, score, maximizing_player_index
             );
 
             if current_player_index == maximizing_player_index {
@@ -331,7 +365,14 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
 
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
 
-    let (score, best_move) = minimax(board, depth, i32::MIN, i32::MAX, my_snake_index, 0);
+    let (score, best_move) = minimax(
+        board,
+        depth,
+        i32::MIN,
+        i32::MAX,
+        my_snake_index,
+        my_snake_index,
+    );
 
     if best_move == "none" {
         println!("No best move found, choosing a random safe move...");
