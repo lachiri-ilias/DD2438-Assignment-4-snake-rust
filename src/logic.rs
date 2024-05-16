@@ -12,7 +12,7 @@
 
 use log::info;
 use serde_json::{json, Value};
-use std::{cmp::max, collections::HashSet, thread::current};
+use std::{clone, cmp::max, collections::HashSet, thread::current};
 
 use rand::seq::SliceRandom;
 
@@ -50,8 +50,6 @@ pub fn start(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
 pub fn end(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
     info!("GAME OVER");
 }
-
-
 
 fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
     let head = you.body.first().unwrap();
@@ -200,8 +198,15 @@ fn flood_fill_area(board: &Board, start: &Coord) -> i32 {
         for (dx, dy) in directions.iter() {
             let nx = pos.x + dx;
             let ny = pos.y + dy;
-            if nx >= 0 && nx < board.width as i32 && ny >= 0 && ny < board.height as i32 &&
-                !board.snakes.iter().any(|s| s.body.contains(&Coord { x: nx, y: ny })) {
+            if nx >= 0
+                && nx < board.width as i32
+                && ny >= 0
+                && ny < board.height as i32
+                && !board
+                    .snakes
+                    .iter()
+                    .any(|s| s.body.contains(&Coord { x: nx, y: ny }))
+            {
                 stack.push(Coord { x: nx, y: ny });
             }
         }
@@ -211,16 +216,32 @@ fn flood_fill_area(board: &Board, start: &Coord) -> i32 {
 }
 
 fn predict_snake_move_towards_food(snake: &Battlesnake, board: &Board) -> Coord {
-    if let Some(food) = board.food.iter().min_by_key(|f| (f.x - snake.body[0].x).abs() + (f.y - snake.body[0].y).abs()) {
+    if let Some(food) = board
+        .food
+        .iter()
+        .min_by_key(|f| (f.x - snake.body[0].x).abs() + (f.y - snake.body[0].y).abs())
+    {
         let head = &snake.body[0];
         if food.x > head.x {
-            return Coord { x: head.x + 1, y: head.y };
+            return Coord {
+                x: head.x + 1,
+                y: head.y,
+            };
         } else if food.x < head.x {
-            return Coord { x: head.x - 1, y: head.y };
+            return Coord {
+                x: head.x - 1,
+                y: head.y,
+            };
         } else if food.y > head.y {
-            return Coord { x: head.x, y: head.y + 1 };
+            return Coord {
+                x: head.x,
+                y: head.y + 1,
+            };
         } else if food.y < head.y {
-            return Coord { x: head.x, y: head.y - 1 };
+            return Coord {
+                x: head.x,
+                y: head.y - 1,
+            };
         }
     }
     snake.body[0].clone() // Return current head position if no food or can't move closer
@@ -253,8 +274,8 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
         //     // Urgent food search modifier when health is critically low
         //     score += 2000; // Increased weight when health is low
         // } else {
-            score += (22 - min_food_distance) * (100 + (100 - you.health)); // Normal weight
-        // }
+        score += (22 - min_food_distance) * (100 + (100 - you.health)); // Normal weight
+                                                                        // }
     }
 
     if dead {
@@ -285,9 +306,10 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
     for snake in &board.snakes {
         if snake.id != you.id {
             let predicted_position = predict_snake_move_towards_food(snake, board);
-            let distance_to_predicted = (predicted_position.x - head.x).abs() + (predicted_position.y - head.y).abs();
+            let distance_to_predicted =
+                (predicted_position.x - head.x).abs() + (predicted_position.y - head.y).abs();
             if distance_to_predicted < min_enemy_distance {
-                    min_enemy_distance = distance_to_predicted;
+                min_enemy_distance = distance_to_predicted;
             }
         }
     }
@@ -333,7 +355,7 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
 }
 
 fn minimax(
-    board: &Board,
+    mut board: &mut Board,
     depth: i32,
     alpha: i32,
     beta: i32,
@@ -366,10 +388,11 @@ fn minimax(
     for &move_dir in &directions {
         if is_move_safe(board, &board.snakes[current_player_index], move_dir) {
             move_found = true;
-            let mut new_board = board.clone();
+            // let mut new_board = board.clone();
 
             // Simulate move for the current player
-            simulate_move(&mut new_board, current_player_index, move_dir);
+            let original_snake = board.snakes[current_player_index].clone();
+            simulate_move(&mut board, current_player_index, move_dir);
 
             // println!(
             //     "depth: {}, move: {}, snake id: {}",
@@ -379,13 +402,15 @@ fn minimax(
 
             let next_player_index = (current_player_index + 1) % board.snakes.len();
             let (score, _) = minimax(
-                &new_board,
+                &mut board,
                 depth - 1,
                 alpha,
                 beta,
                 maximizing_player_index,
                 next_player_index,
             );
+
+            board.snakes[current_player_index] = original_snake;
 
             if PRINT {
                 println!(
@@ -394,8 +419,9 @@ fn minimax(
                 );
             }
 
-            if (current_player_index == maximizing_player_index && score > best_score) || 
-               (current_player_index != maximizing_player_index && score < best_score) {
+            if (current_player_index == maximizing_player_index && score > best_score)
+                || (current_player_index != maximizing_player_index && score < best_score)
+            {
                 best_score = score;
                 current_best_move = move_dir.to_string();
             }
@@ -441,13 +467,14 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
         return json!({ "move": "up" });
     }
     println!("----------------NEW TURN----------------");
-    let depth = 8; // Adjust depth based on performance and time constraints
+    let depth = 14; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
 
+    let mut cloned_board = board.clone();
     let (score, best_move) = minimax(
-        board,
+        &mut cloned_board,
         depth,
         i32::MIN,
         i32::MAX,
