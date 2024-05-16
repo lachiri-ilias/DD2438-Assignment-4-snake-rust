@@ -17,7 +17,7 @@ use std::{cmp::max, collections::HashSet, thread::current};
 use rand::seq::SliceRandom;
 
 use crate::{Battlesnake, Board, Coord, Game, GameState};
-const PRINT: bool = true;
+const PRINT: bool = false;
 static mut GAME_STARTED: bool = false;
 // info is called when you create your Battlesnake on play.battlesnake.com
 // and controls your Battlesnake's appearance
@@ -50,6 +50,8 @@ pub fn start(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
 pub fn end(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
     info!("GAME OVER");
 }
+
+
 
 fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
     let head = you.body.first().unwrap();
@@ -183,6 +185,47 @@ fn simulate_move(board: &mut Board, snake_id: usize, move_dir: &str) {
     // here add head-to-head collision detection
 }
 
+fn flood_fill_area(board: &Board, start: &Coord) -> i32 {
+    let mut visited = HashSet::new();
+    let mut stack = vec![start.clone()];
+
+    let mut area = 0;
+    while let Some(pos) = stack.pop() {
+        if !visited.insert(pos.clone()) {
+            continue;
+        }
+
+        area += 1;
+        let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]; // up, right, down, left
+        for (dx, dy) in directions.iter() {
+            let nx = pos.x + dx;
+            let ny = pos.y + dy;
+            if nx >= 0 && nx < board.width as i32 && ny >= 0 && ny < board.height as i32 &&
+                !board.snakes.iter().any(|s| s.body.contains(&Coord { x: nx, y: ny })) {
+                stack.push(Coord { x: nx, y: ny });
+            }
+        }
+    }
+
+    area
+}
+
+fn predict_snake_move_towards_food(snake: &Battlesnake, board: &Board) -> Coord {
+    if let Some(food) = board.food.iter().min_by_key(|f| (f.x - snake.body[0].x).abs() + (f.y - snake.body[0].y).abs()) {
+        let head = &snake.body[0];
+        if food.x > head.x {
+            return Coord { x: head.x + 1, y: head.y };
+        } else if food.x < head.x {
+            return Coord { x: head.x - 1, y: head.y };
+        } else if food.y > head.y {
+            return Coord { x: head.x, y: head.y + 1 };
+        } else if food.y < head.y {
+            return Coord { x: head.x, y: head.y - 1 };
+        }
+    }
+    snake.body[0].clone() // Return current head position if no food or can't move closer
+}
+
 fn evaluate_board(board: &Board, you_id: usize) -> i32 {
     let you = &board.snakes[you_id];
     let head = &you.body[0];
@@ -203,34 +246,55 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
 
     // Factor food distance into the score
     if just_ate_food {
-        score += 5000; // High score for eating food
+        score += 500000; // High score for eating food
     } else if min_food_distance != std::i32::MAX {
-        score += (22 - min_food_distance) * (100 + (100 - you.health));
+        // [TO TEST MORE]
+        // if you.health < 40 {
+        //     // Urgent food search modifier when health is critically low
+        //     score += 2000; // Increased weight when health is low
+        // } else {
+            score += (22 - min_food_distance) * (100 + (100 - you.health)); // Normal weight
+        // }
     }
 
     if dead {
         score -= 5500;
     }
 
+    // Area control: We can add it but we need to make small depth bu t
+    // score += flood_fill_area(board, head);
+
     // Add score for available health (more health is better)
     score += you.health as i32;
 
     // Calculate distance to the nearest enemy body segment
+    // let mut min_enemy_distance = std::i32::MAX;
+    // for snake in &board.snakes {
+    //     if snake.id != you.id {
+    //         for segment in &snake.body {
+    //             let enemy_distance = (segment.x - head.x).abs() + (segment.y - head.y).abs();
+    //             if enemy_distance < min_enemy_distance {
+    //                 if enemy_distance < min_enemy_distance {
+    //                 min_enemy_distance = enemy_distance;
+    //             }
+    //         }
+    //     }
+    // }
+
     let mut min_enemy_distance = std::i32::MAX;
     for snake in &board.snakes {
         if snake.id != you.id {
-            for segment in &snake.body {
-                let enemy_distance = (segment.x - head.x).abs() + (segment.y - head.y).abs();
-                if enemy_distance < min_enemy_distance {
-                    min_enemy_distance = enemy_distance;
-                }
+            let predicted_position = predict_snake_move_towards_food(snake, board);
+            let distance_to_predicted = (predicted_position.x - head.x).abs() + (predicted_position.y - head.y).abs();
+            if distance_to_predicted < min_enemy_distance {
+                    min_enemy_distance = distance_to_predicted;
             }
         }
     }
 
     // Apply a non-linear penalty for being close to an enemy
     if min_enemy_distance != std::i32::MAX {
-        score -= (22 - min_enemy_distance) * 50;
+        score -= (22 - min_enemy_distance) * 100;
     }
 
     // Add score for free space around the snake's head (prefer more space)
@@ -330,22 +394,28 @@ fn minimax(
                 );
             }
 
+            if (current_player_index == maximizing_player_index && score > best_score) || 
+               (current_player_index != maximizing_player_index && score < best_score) {
+                best_score = score;
+                current_best_move = move_dir.to_string();
+            }
+
             if current_player_index == maximizing_player_index {
                 // Your snake is maximizing
-                if score > best_score {
-                    best_score = score;
-                    current_best_move = move_dir.to_string();
-                }
+                // if score > best_score {
+                //     best_score = score;
+                //     current_best_move = move_dir.to_string();
+                // }
                 alpha = std::cmp::max(alpha, score);
                 if beta <= alpha {
                     break;
                 }
             } else {
                 // Opponent snake is minimizing
-                if score < best_score {
-                    best_score = score;
-                    current_best_move = move_dir.to_string();
-                }
+                // if score < best_score {
+                //     best_score = score;
+                //     current_best_move = move_dir.to_string();
+                // }
                 beta = std::cmp::min(beta, score);
                 if beta <= alpha {
                     break;
@@ -371,7 +441,7 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
         return json!({ "move": "up" });
     }
     println!("----------------NEW TURN----------------");
-    let depth = 3; // Adjust depth based on performance and time constraints
+    let depth = 8; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
