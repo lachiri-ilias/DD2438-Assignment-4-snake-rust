@@ -15,10 +15,9 @@ use serde_json::{json, Value};
 use std::{cmp::max, collections::HashSet, thread::current};
 
 use rand::seq::SliceRandom;
-use std::collections::HashMap;
 
 use crate::{Battlesnake, Board, Coord, Game, GameState};
-
+const PRINT: bool = true;
 static mut GAME_STARTED: bool = false;
 // info is called when you create your Battlesnake on play.battlesnake.com
 // and controls your Battlesnake's appearance
@@ -37,10 +36,12 @@ pub fn info() -> Value {
 
 // start is called when your Battlesnake begins a game
 pub fn start(_game: &Game, _turn: &i32, _board: &Board, _you: &Battlesnake) {
-    println!(
-        "--------------GAME START-----------, my snake id: {}",
-        _you.id
-    );
+    if PRINT {
+        println!(
+            "--------------GAME START-----------, my snake id: {}",
+            _you.id
+        );
+    }
     unsafe { GAME_STARTED = true };
     info!("GAME START");
 }
@@ -98,10 +99,12 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
                 .map_or(false, |h| h.x == new_x && h.y == new_y)
         {
             if snake.body.len() >= you.body.len() {
-                println!(
-                    "$$$$  Avoiding head-to-head collision with snake {}",
-                    snake.id
-                );
+                if PRINT {
+                    println!(
+                        "$$$$  Avoiding head-to-head collision with snake {}",
+                        snake.id
+                    );
+                }
                 return false;
             }
         }
@@ -119,23 +122,27 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
         .filter(|&pos| {
             pos.0 >= 0 && pos.0 < board.width && pos.1 >= 0 && pos.1 < board.height as i32
         })
-        .filter(|&pos| (pos != my_head) || (you.body.len() > 1))
+        .filter(|&pos| (pos != my_head) || (you.body.len() == 1))
         .collect();
 
-    println!(
-        "my head: {:?}, dir: {}, surrounding: {:?}",
-        you.head, direction, surrounding_positions
-    );
+    if PRINT {
+        // println!(
+        //     "my head: {:?}, dir: {}, surrounding: {:?}",
+        //     you.head, direction, surrounding_positions
+        // );
+    }
 
     for snake in &board.snakes {
         if snake.id != you.id {
             if surrounding_positions.iter().any(|(x, y)| {
                 snake.body[0].x == *x && snake.body[0].y == *y && snake.body.len() >= you.body.len()
             }) {
-                println!(
-                    "$$$$  Avoiding head-to-head collision with snake {}",
-                    snake.id
-                );
+                if PRINT {
+                    println!(
+                        "$$$$  Avoiding head-to-head collision with snake {}",
+                        snake.id
+                    );
+                }
                 return false;
             }
         }
@@ -196,9 +203,9 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
 
     // Factor food distance into the score
     if just_ate_food {
-        score += 2300; // High score for eating food
+        score += 5000; // High score for eating food
     } else if min_food_distance != std::i32::MAX {
-        score += (22 - min_food_distance) * 100;
+        score += (22 - min_food_distance) * (100 + (100 - you.health));
     }
 
     if dead {
@@ -223,7 +230,7 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
 
     // Apply a non-linear penalty for being close to an enemy
     if min_enemy_distance != std::i32::MAX {
-        score -= (22 - min_enemy_distance) * 100;
+        score -= (22 - min_enemy_distance) * 50;
     }
 
     // Add score for free space around the snake's head (prefer more space)
@@ -271,10 +278,12 @@ fn minimax(
 ) -> (i32, String) {
     if depth == 0 {
         let score = evaluate_board(board, current_player_index);
-        println!(
-            "depth: {}, snake id: {}, score: {}",
-            depth, current_player_index, score
-        );
+        if PRINT {
+            println!(
+                "depth: {}, snake id: {}, score: {}",
+                depth, current_player_index, score
+            );
+        }
 
         return (score, String::from("none")); // Assuming index 0 is your snake
     }
@@ -314,10 +323,12 @@ fn minimax(
                 next_player_index,
             );
 
-            println!(
-                "depth: {}, move: {}, snake id: {}, score: {}, maximizing id: {}",
-                depth, move_dir, current_player_index, score, maximizing_player_index
-            );
+            if PRINT {
+                println!(
+                    "depth: {}, move: {}, snake id: {}, score: {}, maximizing id: {}",
+                    depth, move_dir, current_player_index, score, maximizing_player_index
+                );
+            }
 
             if current_player_index == maximizing_player_index {
                 // Your snake is maximizing
@@ -360,7 +371,7 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
         return json!({ "move": "up" });
     }
     println!("----------------NEW TURN----------------");
-    let depth = 2; // Adjust depth based on performance and time constraints
+    let depth = 3; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
