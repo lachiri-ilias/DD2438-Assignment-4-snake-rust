@@ -304,7 +304,7 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
     // if you.health <= 10 {
     //     score -= 300;
     // }
-    // score += 150 * nb_of_snakes_dead;
+    score += 1500 * nb_of_snakes_dead;
 
     score
 }
@@ -315,8 +315,11 @@ fn minimax(
     alpha: i32,
     beta: i32,
     maximizing_player_index: usize,
-    current_player_index: usize,
+    mut current_player_index: usize,
 ) -> (i32, String) {
+    while board.snakes[current_player_index].body.len() == 0 {
+        current_player_index = (current_player_index + 1) % board.snakes.len();
+    }
     if depth == 0 {
         let score = evaluate_board(board, maximizing_player_index);
         if PRINT {
@@ -425,7 +428,7 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
         return json!({ "move": "up" });
     }
     println!("----------------NEW TURN----------------");
-    let depth = 16; // Adjust depth based on performance and time constraints
+    let depth = 12; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
