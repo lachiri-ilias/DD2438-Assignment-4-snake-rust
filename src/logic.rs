@@ -12,7 +12,7 @@
 
 use log::info;
 use serde_json::{json, Value};
-use std::{clone, cmp::max, collections::HashSet, thread::current};
+use std::{clone, cmp::max, collections::HashSet, env::remove_var, thread::current};
 
 use rand::seq::SliceRandom;
 
@@ -151,7 +151,7 @@ fn is_move_safe(board: &Board, you: &Battlesnake, direction: &str) -> bool {
     true
 }
 
-fn simulate_move(board: &mut Board, snake_id: usize, move_dir: &str) {
+fn simulate_move(board: &mut Board, snake_id: usize, move_dir: &str) -> Option<Coord> {
     let (dx, dy) = match move_dir {
         "up" => (0, 1),
         "down" => (0, -1),
@@ -173,11 +173,13 @@ fn simulate_move(board: &mut Board, snake_id: usize, move_dir: &str) {
         board.snakes[snake_id].health = 100;
         board.snakes[snake_id].length += 1;
         board.snakes[snake_id].body.insert(0, new_head); // Add new head to the body
-        board.food.remove(index); // Remove the food from the board
+        let removed_food = board.food.remove(index);
+        return Some(removed_food);
     } else {
         board.snakes[snake_id].health -= 1;
         board.snakes[snake_id].body.pop(); // Remove the last segment of the body if not eating
         board.snakes[snake_id].body.insert(0, new_head); // Add new head to the body
+        return None;
     }
 
     // here add head-to-head collision detection
@@ -253,7 +255,7 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
     let mut score = 0;
 
     // Check if the snake just ate food (health is max)
-    let just_ate_food = you.health == 100;
+    let just_ate_food = you.health > 90;
     let dead = you.health == 0;
 
     // Calculate distance to the nearest food
@@ -264,44 +266,6 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
             min_food_distance = food_distance;
         }
     }
-
-    // Factor food distance into the score
-    if just_ate_food {
-        score += 500000; // High score for eating food
-    }
-    if min_food_distance != std::i32::MAX {
-        // [TO TEST MORE]
-        // if you.health < 40 {
-        //     // Urgent food search modifier when health is critically low
-        //     score += 2000; // Increased weight when health is low
-        // } else {
-        score += (22 - min_food_distance) * (100 + (100 - you.health)); // Normal weight
-                                                                        // }
-    }
-
-    if dead {
-        score -= 5500;
-    }
-
-    // Area control: We can add it but we need to make small depth bu t
-    // score += flood_fill_area(board, head);
-
-    // Add score for available health (more health is better)
-    score += you.health as i32;
-
-    // Calculate distance to the nearest enemy body segment
-    // let mut min_enemy_distance = std::i32::MAX;
-    // for snake in &board.snakes {
-    //     if snake.id != you.id {
-    //         for segment in &snake.body {
-    //             let enemy_distance = (segment.x - head.x).abs() + (segment.y - head.y).abs();
-    //             if enemy_distance < min_enemy_distance {
-    //                 if enemy_distance < min_enemy_distance {
-    //                 min_enemy_distance = enemy_distance;
-    //             }
-    //         }
-    //     }
-    // }
 
     let mut min_enemy_distance = std::i32::MAX;
     for snake in &board.snakes {
@@ -315,42 +279,32 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
         }
     }
 
-    // Apply a non-linear penalty for being close to an enemy
-    if min_enemy_distance != std::i32::MAX {
-        score -= (22 - min_enemy_distance) * 100;
+    let mut nb_of_snakes_dead = 0;
+
+    for s in &board.snakes {
+        if s.id != you.id && s.body.len() == 0 {
+            nb_of_snakes_dead += 1;
+        }
     }
 
-    // Add score for free space around the snake's head (prefer more space)
-    let directions = ["up", "down", "left", "right"];
-    let free_space = directions
-        .iter()
-        .map(|&dir| match dir {
-            "up" => (head.x, head.y + 1),
-            "down" => (head.x, head.y - 1),
-            "left" => (head.x - 1, head.y),
-            "right" => (head.x + 1, head.y),
-            _ => (head.x, head.y),
-        })
-        .filter(|&(new_x, new_y)| {
-            // Ensure the new position is within bounds and not colliding with any snake
-            new_x >= 0
-                && new_x < board.width as i32
-                && new_y >= 0
-                && new_y < board.height as i32
-                && !you
-                    .body
-                    .iter()
-                    .any(|segment| segment.x == new_x && segment.y == new_y)
-                && !board.snakes.iter().any(|snake| {
-                    snake
-                        .body
-                        .iter()
-                        .any(|segment| segment.x == new_x && segment.y == new_y)
-                })
-        })
-        .count() as i32;
-
-    score += free_space * 10; // Each free space adds to the score
+    // Factor food distance into the score
+    if just_ate_food {
+        score += 100; // High score for eating food
+    }
+    if min_food_distance != std::i32::MAX {
+        score += 100 / (min_food_distance + 1); // Normal weight
+    }
+    // Apply a non-linear penalty for being close to an enemy
+    if min_enemy_distance != std::i32::MAX {
+        score -= 100 / (min_enemy_distance + 1);
+    }
+    // if you.health <= 20 {
+    //     score -= 100;
+    // }
+    // if you.health <= 10 {
+    //     score -= 300;
+    // }
+    // score += 150 * nb_of_snakes_dead;
 
     score
 }
@@ -393,8 +347,11 @@ fn minimax(
 
             // Simulate move for the current player
             let original_snake = board.snakes[current_player_index].clone();
-            simulate_move(&mut board, current_player_index, move_dir);
+            let removed_food = simulate_move(&mut board, current_player_index, move_dir);
 
+            if let Some(food) = removed_food {
+                board.food.insert(0, food);
+            }
             // println!(
             //     "depth: {}, move: {}, snake id: {}",
             //     depth, move_dir, current_player_index
@@ -468,7 +425,7 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
         return json!({ "move": "up" });
     }
     println!("----------------NEW TURN----------------");
-    let depth = 14; // Adjust depth based on performance and time constraints
+    let depth = 16; // Adjust depth based on performance and time constraints
     let snakes = &board.snakes; // Add opponents here as well
 
     let my_snake_index = snakes.iter().position(|s| s.id == you.id).unwrap();
