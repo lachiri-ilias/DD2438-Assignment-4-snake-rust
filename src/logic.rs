@@ -268,7 +268,8 @@ fn evaluate_board(board: &Board, you_id: usize) -> i32 {
     // Factor food distance into the score
     if just_ate_food {
         score += 500000; // High score for eating food
-    } else if min_food_distance != std::i32::MAX {
+    }
+    if min_food_distance != std::i32::MAX {
         // [TO TEST MORE]
         // if you.health < 40 {
         //     // Urgent food search modifier when health is critically low
@@ -363,7 +364,7 @@ fn minimax(
     current_player_index: usize,
 ) -> (i32, String) {
     if depth == 0 {
-        let score = evaluate_board(board, current_player_index);
+        let score = evaluate_board(board, maximizing_player_index);
         if PRINT {
             println!(
                 "depth: {}, snake id: {}, score: {}",
