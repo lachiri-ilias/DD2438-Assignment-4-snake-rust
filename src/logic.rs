@@ -28,6 +28,7 @@ pub fn info() -> Value {
         "apiversion": "1",
         "author": "Ilias_Saad", // TODO: Your Battlesnake Username
         "color": "#006233", // TODO: Choose color
+
         "head": "do-sammy", // TODO: Choose head
         "tail": "mystic-moon", // TODO: Choose tail
     });
