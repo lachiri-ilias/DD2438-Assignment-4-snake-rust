@@ -12,11 +12,10 @@
 
 use log::info;
 use serde_json::{json, Value};
-use std::{clone, cmp::max, collections::HashSet, env::remove_var, thread::current};
 
 use rand::seq::SliceRandom;
 
-use crate::{Battlesnake, Board, Coord, Game, GameState};
+use crate::{Battlesnake, Board, Coord, Game};
 const PRINT: bool = false;
 static mut GAME_STARTED: bool = false;
 // info is called when you create your Battlesnake on play.battlesnake.com
@@ -153,8 +152,6 @@ fn simulate_move(board: &mut Board, snake_id: usize, move_dir: &str) -> Option<C
 
     // here add head-to-head collision detection
 }
-
-
 
 fn predict_snake_move_towards_food(snake: &Battlesnake, board: &Board) -> Coord {
     if let Some(food) = board
@@ -400,51 +397,4 @@ pub fn get_move(_game: &Game, turn: &i32, board: &Board, you: &Battlesnake) -> V
     );
 
     json!({ "move": best_move })
-}
-
-pub fn print_board(board: &Board, you: &Battlesnake) {
-    let snakes = &board.snakes;
-    let snake_chars = ('A'..='Z').collect::<Vec<_>>();
-
-    for (index, snake) in snakes.iter().enumerate() {
-        let snake_char = snake_chars.get(index).unwrap_or(&'?');
-        println!("Snake {}: {}", snake_char, snake.health);
-    }
-
-    let snake_coords: Vec<_> = snakes
-        .iter()
-        .map(|snake| {
-            let coords = snake.body.iter().cloned().collect::<HashSet<_>>();
-            (snake.id.clone(), coords)
-        })
-        .collect();
-
-    let player_coords = you.body.iter().cloned().collect::<HashSet<_>>();
-
-    for y in (0..board.height).rev() {
-        for x in 0..board.width {
-            let coord = crate::Coord { x: x, y: y as i32 };
-            let cell = if board.food.contains(&coord) {
-                "F".to_string()
-            } else if board.hazards.contains(&coord) {
-                "-".to_string()
-            } else if player_coords.contains(&coord) {
-                "S".to_string()
-            } else if let Some(snake_char) = snake_coords
-                .iter()
-                .find(|(_, coords)| coords.contains(&coord))
-                .map(|(id, _)| {
-                    let idx = snakes.iter().position(|s| s.id == *id).unwrap();
-                    let char = snake_chars[idx];
-                    (char.to_string()).repeat(1)
-                })
-            {
-                snake_char
-            } else {
-                "#".to_string()
-            };
-            print!("{} ", cell);
-        }
-        println!();
-    }
 }
